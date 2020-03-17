@@ -39,6 +39,18 @@ def hub_tests():
     reqpkt = mk_pkt("20:00:00:00:00:01", "10:00:00:00:00:03", '192.168.1.100','172.16.42.2')
     s.expect(PacketInputEvent("eth2", reqpkt, display=Ethernet), "An Ethernet frame should arrive on eth2 with destination address the same as eth2's MAC address")
     s.expect(PacketInputTimeoutEvent(1.0), "The hub should not do anything in response to a frame arriving with a destination address referring to the hub itself.")
+
+    # test case 4: 
+    scenario.add_interface('eth0', 'ab:cd:ef:ab:cd:ef', '1.2.3.4', '255.255.0.0', iftype=InterfaceType.Wired)
+
+    # construct a handmade packet to be received
+    p = Ethernet(src="00:11:22:33:44:55", dst="66:55:44:33:22:11") + \
+        IPv4(src="1.1.1.1", dst="2.2.2.2", protocol=IPProtocol.UDP) + \
+        UDP(src=5555, dst=8888) + b'some payload'
+
+    # expect that the packet is received
+    scenario.expect(PacketInputEvent('eth0', p), "A UDP packet should arrive on eth0.")
+    
     return s
 
 scenario = hub_tests()
