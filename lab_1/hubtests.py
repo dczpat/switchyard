@@ -41,15 +41,9 @@ def hub_tests():
     s.expect(PacketInputTimeoutEvent(1.0), "The hub should not do anything in response to a frame arriving with a destination address referring to the hub itself.")
 
     # test case 4: 
-    scenario.add_interface('eth0', 'ab:cd:ef:ab:cd:ef', '1.2.3.4', '255.255.0.0', iftype=InterfaceType.Wired)
-
-    # construct a handmade packet to be received
-    p = Ethernet(src="00:11:22:33:44:55", dst="66:55:44:33:22:11") + \
-        IPv4(src="1.1.1.1", dst="2.2.2.2", protocol=IPProtocol.UDP) + \
-        UDP(src=5555, dst=8888) + b'some payload'
-
-    # expect that the packet is received
-    scenario.expect(PacketInputEvent('eth0', p), "A UDP packet should arrive on eth0.")
+    new_pkt = mk_pkt("00:11:22:33:44:55", "66:55:44:33:22:11", "1.1.1.1", "2.2.2.2")  
+    s.expect(PacketInputEvent('eth0', new_pkt, display=Ethernet), "The frame should arrive on eth0.")
+    s.expect(PacketOutputEvent('eth1', new_pkt, "eth2", new_pkt, display=Ethernet), "The frame should be flooded out eth1.")
     
     return s
 
