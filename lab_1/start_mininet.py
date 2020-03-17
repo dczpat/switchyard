@@ -40,7 +40,7 @@ class PySwitchTopo(Topo):
 
         # Modified version:
         #
-        #   server1——hub——client
+        #   server1---hub---lient
 
         nodeconfig = {'cpu':-1}
         self.addHost('server1', **nodeconfig)

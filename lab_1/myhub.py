@@ -22,7 +22,7 @@ def main(net):
 
         log_debug ("In {} received packet {} on {}".format(net.name, packet, dev))
         eth = packet.get_header(Ethernet)
-        in_cnt++
+        in_cnt+=1
 
         if eth is None:
             log_info("Received a non-Ethernet packet?!")
