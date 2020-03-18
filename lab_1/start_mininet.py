@@ -48,9 +48,8 @@ class PySwitchTopo(Topo):
         self.addHost('hub', **nodeconfig)
         self.addHost('client', **nodeconfig)
         
-#        for node in ['server1','server2','client']:
+#        for node in ['server1','client']:
         for node in ['server1','client']:
-
             # all links are 10Mb/s, 100 millisecond prop delay
             self.addLink(node, 'hub', bw=10, delay='100ms')
 

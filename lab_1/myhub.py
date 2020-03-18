@@ -22,6 +22,7 @@ def main(net):
 
         log_debug ("In {} received packet {} on {}".format(net.name, packet, dev))
         eth = packet.get_header(Ethernet)
+        # in_cnt should +1 when another packet received
         in_cnt+=1
 
         if eth is None:
@@ -32,7 +33,9 @@ def main(net):
             log_info ("Received a packet intended for me")
             log_info ("in:{} out:{}".format(in_cnt, out_cnt))
         else:
-            out_cnt+=len(my_interfaces)
+            # add the exact length of mymacs except the receiving port itself to out_cnt
+            out_cnt+=len(mymacs)-1
+            # add log_info as required
             log_info ("in:{} out:{}".format(in_cnt, out_cnt))
             for intf in my_interfaces:
                 if dev != intf.name:
