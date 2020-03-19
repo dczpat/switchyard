@@ -6,10 +6,13 @@ in it, not a learning switch.  (I.e., it's currently a switch
 that doesn't learn.)
 '''
 from switchyard.lib.userlib import *
+import time
 
 def main(net):
     my_interfaces = net.interfaces() 
     mymacs = [intf.ethaddr for intf in my_interfaces]
+    # add an empty dict intended for host-(intf,last_time) pairs
+    tab={}
 
     while True:
         try:
@@ -20,11 +23,30 @@ def main(net):
             return
 
         log_debug ("In {} received packet {} on {}".format(net.name, packet, input_port))
-        if packet[0].dst in mymacs:
-            log_debug ("Packet intended for me")
+        # if packet[0].dst in mymacs:
+        #     log_debug ("Packet intended for me")
+        # else:
+        #     for intf in my_interfaces:
+        #         if input_port != intf.name:
+        #             log_debug ("Flooding packet {} to {}".format(packet, intf.name))
+        #             net.send_packet(intf.name, packet)
+        tab[packet[0].src] = {'intf': input_port, 'last': time.time()}
+        # dst-port already recorded
+        if packet[0].dst in tab:
+            cur_intf = tab[packet[0].dst]
+            log_debug ("Flooding packet {} to {}".format(packet, cur_intf))
+            net.send_packet(cur_intf, packet)
+        # dst-port not recorded yet
+        # flood the packet out all ports except the one receiving it
         else:
             for intf in my_interfaces:
                 if input_port != intf.name:
                     log_debug ("Flooding packet {} to {}".format(packet, intf.name))
                     net.send_packet(intf.name, packet)
+
+        # delete timeout entries in the forwarding table
+        for host in tab:
+            if time.time()-tab[host]['last'] > 10:
+                del tab[host]
+
     net.shutdown()
