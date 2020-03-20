@@ -23,30 +23,26 @@ def main(net):
             return
 
         log_debug ("In {} received packet {} on {}".format(net.name, packet, input_port))
-        # if packet[0].dst in mymacs:
-        #     log_debug ("Packet intended for me")
-        # else:
-        #     for intf in my_interfaces:
-        #         if input_port != intf.name:
-        #             log_debug ("Flooding packet {} to {}".format(packet, intf.name))
-        #             net.send_packet(intf.name, packet)
+        
         tab[packet[0].src] = {'intf': input_port, 'last': time.time()}
+        # delete timeout entries in the forwarding table
+        for host in list(tab):
+            if time.time()-tab[host]['last'] > 10:
+                del tab[host]
+
         # dst-port already recorded
         if packet[0].dst in tab:
-            cur_intf = tab[packet[0].dst]
+            cur_intf = tab[packet[0].dst]['intf']
             log_debug ("Flooding packet {} to {}".format(packet, cur_intf))
             net.send_packet(cur_intf, packet)
         # dst-port not recorded yet
         # flood the packet out all ports except the one receiving it
         else:
-            for intf in my_interfaces:
-                if input_port != intf.name:
-                    log_debug ("Flooding packet {} to {}".format(packet, intf.name))
-                    net.send_packet(intf.name, packet)
-
-        # delete timeout entries in the forwarding table
-        for host in tab:
-            if time.time()-tab[host]['last'] > 10:
-                del tab[host]
+            # if dst addr is the switch itself, do nothing!
+            if packet[0].dst not in mymacs: 
+                for intf in my_interfaces:
+                    if input_port != intf.name:
+                        log_debug ("Flooding packet {} to {}".format(packet, intf.name))
+                        net.send_packet(intf.name, packet)
 
     net.shutdown()
