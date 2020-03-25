@@ -23,7 +23,8 @@ def main(net):
             return
 
         log_debug ("In {} received packet {} on {}".format(net.name, packet, input_port))
-        
+        # when new packet comes, record its information or update recorded information
+        # since 'dictionary' is used and its keys(hosts' mac addresses) are all unique, the following line can do it all
         tab[packet[0].src] = {'intf': input_port, 'last': time.time()}
         # delete timeout entries in the forwarding table
         for host in list(tab):

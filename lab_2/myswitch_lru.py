@@ -16,6 +16,7 @@ def main(net):
     # add an empty heapq to store forwarding rules
     # each element of tab should be a tuple like: (last_time, host, intf)
     # when a heapq consists of tuples, it is organized based on the tuples' first elements
+    # therefore the least recently used rule(its 'last_time' being the 'least' when treated as a number) is always at the front, which is what we expect
     tab = []
 
     while True:
@@ -35,7 +36,8 @@ def main(net):
                 if rule[1] == packet[0].src:
                     cur = rule
                     break
-            # first delete, then add a new one   
+            # adjust the heapq
+            # first delete, then add a new one since it's a tuple
             tab.remove(cur)
         # src not recorded yet
         else:
@@ -55,6 +57,8 @@ def main(net):
                     break
             log_debug ("Flooding packet {} to {}".format(packet, cur[2]))
             net.send_packet(cur[2], packet)
+            # adjust the heapq
+            # first delete, then add a new one since it's a tuple
             new_rule = (time.time(), cur[1], cur[2])
             tab.remove(cur)
             tab.append(new_rule)

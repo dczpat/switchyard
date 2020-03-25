@@ -35,7 +35,8 @@ def main(net):
                 if rule[1] == packet[0].src:
                     cur = rule
                     break
-            # first delete, then add a new one   
+            # adjust the heapq
+            # first delete, then add a new one since it's a tuple
             new_rule = (cur[0],cur[1],input_port)
             tab.remove(cur)
             tab.append(new_rule)
@@ -58,6 +59,8 @@ def main(net):
                     break
             log_debug ("Flooding packet {} to {}".format(packet, cur[2]))
             net.send_packet(cur[2], packet)
+            # add traffic volume and adjust the heapq
+            # first delete, then add a new one since it's a tuple
             new_rule = (cur[0]+1,cur[1],cur[2])
             tab.remove(cur)
             tab.append(new_rule)
