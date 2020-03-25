@@ -36,8 +36,10 @@ def main(net):
                     cur = rule
                     break
             # first delete, then add a new one   
-            #cur[0]+=1
-            cur[2] = input_port
+            new_rule = (cur[0],cur[1],input_port)
+            tab.remove(cur)
+            tab.append(new_rule)
+            heapq.heapify(tab)
         # src not recorded yet
         else:
             # forwarding table is full
@@ -56,7 +58,9 @@ def main(net):
                     break
             log_debug ("Flooding packet {} to {}".format(packet, cur[2]))
             net.send_packet(cur[2], packet)
-            cur[0] += 1
+            new_rule = (cur[0]+1,cur[1],cur[2])
+            tab.remove(cur)
+            tab.append(new_rule)
             heapq.heapify(tab)
         # dst not recorded yet    
         else:
