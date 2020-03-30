@@ -38,14 +38,12 @@ class Router(object):
 
             if gotpkt:
                 log_debug("Got a packet: {}".format(str(pkt)))
-                # drop this time if it's not an ARP
-                if pkt.has_header(Arp):
-                    arp = pkt.get_header_by_name(Arp)
-                    # drop if it's not a request or target ip does not exist here
-                    if (arp.operation == ArpOperation.Request) and (arp.targetprotoaddr in self.ipaddrs):
-                        wanted_macaddr = self.net.interface_by_ipaddr(arp.targetprotoaddr).ethaddr
-                        arp_reply = create_ip_arp_reply(wanted_macaddr, arp.senderhwaddr, arp.targetprotoaddr, arp.senderprotoaddr)
-                        self.net.send_packet(dev, arp_reply)
+                arp = pkt.get_header(Arp)
+                # drop this time if it's not an ARP request or target ip does not exist here
+                if (arp) and (arp.operation == ArpOperation.Request) and (arp.targetprotoaddr in self.ipaddrs):
+                    wanted_macaddr = self.net.interface_by_ipaddr(arp.targetprotoaddr).ethaddr
+                    arp_reply = create_ip_arp_reply(wanted_macaddr, arp.senderhwaddr, arp.targetprotoaddr, arp.senderprotoaddr)
+                    self.net.send_packet(dev, arp_reply)
 
 
 
