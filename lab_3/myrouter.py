@@ -15,9 +15,11 @@ class Router(object):
         # other initialization stuff here
         self.intfs = net.interfaces()
         # init ipaddrs of all intfs
-        self.ipaddrs=[]
+        self.ipaddrs = []
         for intf in self.intfs:
             self.ipaddrs.append(intf.ipaddr)
+        # init the ARP table
+        self.tab = {}
 
 
     def router_main(self):    
@@ -39,11 +41,19 @@ class Router(object):
             if gotpkt:
                 log_debug("Got a packet: {}".format(str(pkt)))
                 arp = pkt.get_header(Arp)
-                # drop this time if it's not an ARP request or target ip does not exist here
-                if (arp) and (arp.operation == ArpOperation.Request) and (arp.targetprotoaddr in self.ipaddrs):
-                    wanted_macaddr = self.net.interface_by_ipaddr(arp.targetprotoaddr).ethaddr
-                    arp_reply = create_ip_arp_reply(wanted_macaddr, arp.senderhwaddr, arp.targetprotoaddr, arp.senderprotoaddr)
-                    self.net.send_packet(dev, arp_reply)
+                # drop this time if it's not an ARP request
+                if (arp) and (arp.operation == ArpOperation.Request):
+                    # add a new entry into the table or just update a recorded one
+                    self.tab[arp.senderprotoaddr] = {'mac': arp.senderhwaddr, 'last': time.time()}
+                    # delete old entries after 10s of idleness
+                    for host in list(tab):
+                        if time.time()-tab[host]['last'] > 10:
+                            del tab[host]
+                    # drop if target ip does not exist here
+                    if arp.targetprotoaddr in self.ipaddrs:
+                        wanted_macaddr = self.net.interface_by_ipaddr(arp.targetprotoaddr).ethaddr
+                        arp_reply = create_ip_arp_reply(wanted_macaddr, arp.senderhwaddr, arp.targetprotoaddr, arp.senderprotoaddr)
+                        self.net.send_packet(dev, arp_reply)
 
 
 
