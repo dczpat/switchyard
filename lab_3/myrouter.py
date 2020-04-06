@@ -18,7 +18,7 @@ class Router(object):
         self.ipaddrs = []
         for intf in self.intfs:
             self.ipaddrs.append(intf.ipaddr)
-        # init the ARP table
+        # init the ARP table----IP-{MAC,last_time}
         self.tab = {}
 
 
@@ -45,10 +45,12 @@ class Router(object):
                 if (arp) and (arp.operation == ArpOperation.Request):
                     # add a new entry into the table or just update a recorded one
                     self.tab[arp.senderprotoaddr] = {'mac': arp.senderhwaddr, 'last': time.time()}
-                    # delete old entries after 10s of idleness
-                    for host in list(tab):
-                        if time.time()-tab[host]['last'] > 10:
-                            del tab[host]
+                    # delete old entries after 20s of idleness
+                    for host in list(self.tab):
+                        if time.time() - self.tab[host]['last'] > 20:
+                            del self.tab[host]
+                    log_info("Cached ARP table updated: {}".format(str(self.tab)))
+
                     # drop if target ip does not exist here
                     if arp.targetprotoaddr in self.ipaddrs:
                         wanted_macaddr = self.net.interface_by_ipaddr(arp.targetprotoaddr).ethaddr
