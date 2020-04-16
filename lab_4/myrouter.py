@@ -80,47 +80,33 @@ class Router(object):
                 # 1. handle ARP packets
                 arp = pkt.get_header(Arp)
                 if (arp):
+                    # code in Lab 3
                     if (arp.operation == ArpOperation.Request):
-                        # add a new entry into the table or just update a recorded one
+                        # add a new entry into the ARP cache table or just update a recorded one
                         self.arp_tab[arp.senderprotoaddr] = arp.senderhwaddr
                         log_info("Cached ARP table updated: {}".format(str(self.arp_tab)))
 
-                        # drop if target ip does not exist here
+                        # drop it if target ip does not exist here
                         if arp.targetprotoaddr in self.ipaddrs:
                             wanted_macaddr = self.net.interface_by_ipaddr(arp.targetprotoaddr).ethaddr
                             arp_reply = create_ip_arp_reply(wanted_macaddr, arp.senderhwaddr, arp.targetprotoaddr, arp.senderprotoaddr)
                             self.net.send_packet(dev, arp_reply)
                     elif (arp.operation == ArpOperation.Reply):
-                        # handle ARP replies to my requests stuck in the waiting queue
+                        # handle ARP replies to one of my requests stuck in the waiting queue
                         cur_mac = arp.senderhwaddr
                         cur_ip = arp.senderprotoaddr
-                        # add the reply information to the ARP table
+                        # add the reply information to the ARP cache table
                         self.arp_tab[cur_ip] = cur_mac
                         # looking for the corresponding receiver to the ARP reply
                         for entry in self.wait_q[:]:
                             if cur_ip == entry[0]:
-                                # ether = Ethernet()
-                                # ether.src = self.net.interface_by_name((entry[3])[3]).ethaddr
-                                # ether.dst = cur_mac
-                                # ether.ethertype = EtherType.IPv4
+                                # change the Ethernet header of the packet(src and dst)
                                 entry[4].get_header(Ethernet).src = self.net.interface_by_name((entry[3])[3]).ethaddr
                                 entry[4].get_header(Ethernet).dst = cur_mac
-                                # ipv4_pkt = ether + entry[4]
                                 self.net.send_packet((entry[3])[3], entry[4])
+                                # remove the entry from the waiting queue
                                 self.wait_q.remove(entry)
                                 break
-                # 3. update every entry state in the waiting queue
-                for entry in self.wait_q[:]:
-                    # ARP reply is not received after 1s
-                    if time.time() - entry[1] > 1:
-                        # ARP request already sent exactly 5 times
-                        if (entry[2] >= 5):
-                            self.wait_q.remove(entry)
-                        # still be able to send ARP request
-                        else:
-                            entry[1] = time.time()
-                            entry[2] += 1
-                            self.net.send_packet((entry[3])[3], entry[5])
                 # 2. handle IPv4 packets
                 ipv4 = pkt.get_header(IPv4)
                 if (ipv4):
@@ -131,7 +117,7 @@ class Router(object):
                         # denote the updated matched entry
                         matched_entry = []
                         for entry in self.fwd_tab:
-                            prefixnet = IPv4Network(entry[0] + '/' + entry[1],strict=False)
+                            prefixnet = IPv4Network(entry[0] + '/' + entry[1], strict=False)
                             if (ipv4.dst in prefixnet) and (longest < prefixnet.prefixlen):
                                 longest = prefixnet.prefixlen
                                 matched_entry = entry
@@ -140,43 +126,31 @@ class Router(object):
                             # assume ttl >= 0
                             pkt.get_header(IPv4).ttl -= 1
                             intf = self.net.interface_by_name(matched_entry[3])
-                            # 1. the dst is within the subnet to which the intf belong
-                            #    so the next hop is the dst
+                            # 1. the dst is within the subnet to which the intf belong,
+                            #    which means the next hop is the dst
                             if matched_entry[2] == '0.0.0.0':
                                 next_hop_ip = ipv4.dst
                             # 2. the next hop is an IP address on a router through which the destination is reachable
                             else:
                                 next_hop_ip = IPv4Address(matched_entry[2])
+                            # if the IP-MAC pair is already recorded in the ARP cache table,
+                            # then no need for an ARP request
                             if next_hop_ip in self.arp_tab:
                                 dst_macaddr = self.arp_tab[next_hop_ip]
-                                #ether = Ethernet()
                                 pkt.get_header(Ethernet).src = intf.ethaddr
                                 pkt.get_header(Ethernet).dst = dst_macaddr
-                                #pkt.get_header(Ethernet).ethertype = EtherType.IPv4
-                                #ipv4_pkt = ether + ipv4
-                                #self.net.send_packet(matched_entry[3], ipv4_pkt)
                                 self.net.send_packet(matched_entry[3], pkt)
+                            # ARP request is necessary when none recorded
                             else:
+                                # create a new ARP request using the handy API
                                 arp_rqst = create_ip_arp_request(intf.ethaddr, intf.ipaddr, next_hop_ip)
                                 self.net.send_packet(matched_entry[3], arp_rqst)
                                 # add this request into waiting queue
-                                #new_entry = [next_hop_ip, time.time, 1, matched_entry, ipv4, arp_rqst]
                                 new_entry = [next_hop_ip, time.time(), 1, matched_entry, pkt, arp_rqst]
                                 self.wait_q.append(new_entry)
-                # # 3. update every entry state in the waiting queue
-                # for entry in self.wait_q[:]:
-                #     # ARP reply is not received after 1s
-                #     if time.time - entry[1] > 1:
-                #         # ARP request already sent exactly 5 times
-                #         if (entry[2] >= 5):
-                #             self.wait_q.remove(entry)
-                #         # still be able to send ARP request
-                #         else:
-                #             entry[1] = time.time
-                #             entry[2] += 1
-                #             self.net.send_packet((entry[3])[3], entry[5])
+            # when no pkt is received, especially ARP
             else:
-                # 3. update every entry state in the waiting queue
+                # update every entry state in the waiting queue
                 for entry in self.wait_q[:]:
                     # ARP reply is not received after 1s
                     if time.time() - entry[1] > 1:
