@@ -27,9 +27,9 @@ class Router(object):
         # composition of every entry in queue:
         #   1. the next hop ip addr (used for requesting the corresponding mac addr)
         #   2. last_request_time (interval < 1)
-        #   3. cnt-->times of requesting
+        #   3. cnt-->times of requesting (cnt <= 5)
         #   4. matched forwarding table entry
-        #   5. IPv4 packet
+        #   5. IPv4 packet(x)    original packet
         #   6. ARP request packet
         self.wait_q = []
 
@@ -47,10 +47,11 @@ class Router(object):
         # add src 1
         for intf in self.intfs:
             entry = []
-            entry[0] = intf.ipaddr
-            entry[1] = intf.netmask
-            entry[2] = '0.0.0.0' # next hop is NONE in this case
-            entry[3] = intf.name 
+            entry.append(str(intf.ipaddr))
+            entry.append(str(intf.netmask))
+            entry.append('0.0.0.0') # next hop is NONE in this case
+            entry.append(intf.name)
+            self.fwd_tab.append(entry)
 
         # add src 2
         for line in open("forwarding_table.txt"):
@@ -98,15 +99,28 @@ class Router(object):
                         # looking for the corresponding receiver to the ARP reply
                         for entry in self.wait_q[:]:
                             if cur_ip == entry[0]:
-                                ether = Ethernet()
-                                ether.src = self.net.interface_by_name((entry[3])[3]).ethaddr
-                                ether.dst = cur_mac
-                                ether.ethertype = EtherType.IPv4
-                                ipv4_pkt = ether + entry[4]
-                                self.net.send_packet((entry[3])[3], ipv4_pkt)
+                                # ether = Ethernet()
+                                # ether.src = self.net.interface_by_name((entry[3])[3]).ethaddr
+                                # ether.dst = cur_mac
+                                # ether.ethertype = EtherType.IPv4
+                                entry[4].get_header(Ethernet).src = self.net.interface_by_name((entry[3])[3]).ethaddr
+                                entry[4].get_header(Ethernet).dst = cur_mac
+                                # ipv4_pkt = ether + entry[4]
+                                self.net.send_packet((entry[3])[3], entry[4])
                                 self.wait_q.remove(entry)
                                 break
-
+                # 3. update every entry state in the waiting queue
+                for entry in self.wait_q[:]:
+                    # ARP reply is not received after 1s
+                    if time.time() - entry[1] > 1:
+                        # ARP request already sent exactly 5 times
+                        if (entry[2] >= 5):
+                            self.wait_q.remove(entry)
+                        # still be able to send ARP request
+                        else:
+                            entry[1] = time.time()
+                            entry[2] += 1
+                            self.net.send_packet((entry[3])[3], entry[5])
                 # 2. handle IPv4 packets
                 ipv4 = pkt.get_header(IPv4)
                 if (ipv4):
@@ -117,14 +131,14 @@ class Router(object):
                         # denote the updated matched entry
                         matched_entry = []
                         for entry in self.fwd_tab:
-                            prefixnet = IPv4Network(entry[0] + '/' + entry[1])
+                            prefixnet = IPv4Network(entry[0] + '/' + entry[1],strict=False)
                             if (ipv4.dst in prefixnet) and (longest < prefixnet.prefixlen):
                                 longest = prefixnet.prefixlen
                                 matched_entry = entry
                         # drop the pkt if no matches found
                         if matched_entry != [] :
                             # assume ttl >= 0
-                            ipv4.ttl -= 1
+                            pkt.get_header(IPv4).ttl -= 1
                             intf = self.net.interface_by_name(matched_entry[3])
                             # 1. the dst is within the subnet to which the intf belong
                             #    so the next hop is the dst
@@ -132,37 +146,51 @@ class Router(object):
                                 next_hop_ip = ipv4.dst
                             # 2. the next hop is an IP address on a router through which the destination is reachable
                             else:
-                                next_hop_ip = matched_entry[2]
+                                next_hop_ip = IPv4Address(matched_entry[2])
                             if next_hop_ip in self.arp_tab:
                                 dst_macaddr = self.arp_tab[next_hop_ip]
-                                ether = Ethernet()
-                                ether.src = intf.ethaddr
-                                ether.dst = dst_macaddr
-                                ether.ethertype = EtherType.IPv4
-                                ipv4_pkt = ether + ipv4
-                                self.net.send_packet(matched_entry[3], ipv4_pkt)
+                                #ether = Ethernet()
+                                pkt.get_header(Ethernet).src = intf.ethaddr
+                                pkt.get_header(Ethernet).dst = dst_macaddr
+                                #pkt.get_header(Ethernet).ethertype = EtherType.IPv4
+                                #ipv4_pkt = ether + ipv4
+                                #self.net.send_packet(matched_entry[3], ipv4_pkt)
+                                self.net.send_packet(matched_entry[3], pkt)
                             else:
-                                arp_rqst = create_ip_arp_request(senderhwaddr = intf.ethaddr,
-                                                                senderprotoaddr = intf.ipaddr,
-                                                                targetprotoaddr = next_hop_ip)
+                                arp_rqst = create_ip_arp_request(intf.ethaddr, intf.ipaddr, next_hop_ip)
                                 self.net.send_packet(matched_entry[3], arp_rqst)
                                 # add this request into waiting queue
-                                self.wait_q.append(list(next_hop_ip, time.time, 1, matched_entry, ipv4, arp_rqst))
+                                #new_entry = [next_hop_ip, time.time, 1, matched_entry, ipv4, arp_rqst]
+                                new_entry = [next_hop_ip, time.time(), 1, matched_entry, pkt, arp_rqst]
+                                self.wait_q.append(new_entry)
+                # # 3. update every entry state in the waiting queue
+                # for entry in self.wait_q[:]:
+                #     # ARP reply is not received after 1s
+                #     if time.time - entry[1] > 1:
+                #         # ARP request already sent exactly 5 times
+                #         if (entry[2] >= 5):
+                #             self.wait_q.remove(entry)
+                #         # still be able to send ARP request
+                #         else:
+                #             entry[1] = time.time
+                #             entry[2] += 1
+                #             self.net.send_packet((entry[3])[3], entry[5])
+            else:
                 # 3. update every entry state in the waiting queue
                 for entry in self.wait_q[:]:
                     # ARP reply is not received after 1s
-                    if time.time - entry[1] > 1:
+                    if time.time() - entry[1] > 1:
                         # ARP request already sent exactly 5 times
                         if (entry[2] >= 5):
                             self.wait_q.remove(entry)
                         # still be able to send ARP request
                         else:
-                            entry[1] = time.time
+                            entry[1] = time.time()
                             entry[2] += 1
                             self.net.send_packet((entry[3])[3], entry[5])
 
-
 def main(net):
+
     '''
     Main entry point for router.  Just create Router
     object and get it going.
