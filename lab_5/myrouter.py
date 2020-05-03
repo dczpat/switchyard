@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 '''
 Basic IPv4 router (static routing) in Python.
 '''
@@ -9,6 +8,7 @@ import os
 import time
 from switchyard.lib.userlib import *
 from switchyard.lib.address import *
+
 
 class Router(object):
     def __init__(self, net):
@@ -31,6 +31,7 @@ class Router(object):
         #   4. matched forwarding table entry
         #   5. IPv4 packet(x)    original packet
         #   6. ARP request packet
+        #   7. input port obj
         self.wait_q = []
 
     def init_fwd_tab(self):
@@ -49,7 +50,7 @@ class Router(object):
             entry = []
             entry.append(str(intf.ipaddr))
             entry.append(str(intf.netmask))
-            entry.append('0.0.0.0') # next hop is NONE in this case
+            entry.append('0.0.0.0')  # next hop is NONE in this case
             entry.append(intf.name)
             self.fwd_tab.append(entry)
 
@@ -58,19 +59,82 @@ class Router(object):
             entry = line.split()
             self.fwd_tab.append(entry)
 
-    def ipv4_handle(self, ipv4_pkt):
+    def send_icmp_error_pkt(self, error_case, ipv4_pkt, input_intf):
+        '''
+        put together all 4 error cases together to simplify code
+        '''
+        # if ipv4_pkt.src not in self.ipaddrs:
+        #     return
+        # drop the pkt if another 'error' occurs with the error icmp pkt
+        match = False
+        for entry in self.fwd_tab:
+            prefixnet = IPv4Network(entry[0] + '/' + entry[1], strict=False)
+            if ipv4_pkt.dst in prefixnet:
+                match = True
+                break
+        if match == False:
+            return
+
+        tmp_icmp = ICMP()
+        tmp_icmp.icmpdata.data = ipv4_pkt.to_bytes()[:28]
+
+        tmp_ip = IPv4()
+        tmp_ip.protocol = IPProtocol.ICMP
+        tmp_ip.ttl = 64
+        tmp_ip.src = input_intf.ipaddr
+        tmp_ip.dst = ipv4_pkt.src
+
+        icmp = ipv4_pkt.get_header(ICMP)
+        # ICMP error case 1: no match in forwarding table found
+        if error_case == 1:
+            tmp_icmp.icmptype = ICMPType.DestinationUnreachable
+            tmp_icmp.icmpcode = 0
+        # ICMP error case 2: TTL become zero
+        elif error_case == 2:
+            tmp_icmp.icmptype = ICMPType.TimeExceeded
+            tmp_icmp.icmpcode = 0
+        # ICMP error case 3: no ARP reply received
+        elif error_case == 3:
+            tmp_icmp.icmptype = ICMPType.DestinationUnreachable
+            tmp_icmp.icmpcode = 1
+        # ICMP error case 4: dst belong to the router itself while it's not an ICMP echo request
+        elif error_case == 4:
+            tmp_icmp.icmptype = ICMPType.DestinationUnreachable
+            tmp_icmp.icmpcode = 3
+
+        new_ipv4_pkt = tmp_ip + tmp_icmp
+        ipv4_handle(new_ipv4_pkt, input_intf)
+
+    def ipv4_handle(self, ipv4_pkt, input_intf):
         '''
         Handle the IPv4 forwarding job of the router
         in order to simplify the code
         '''
         # TODO 解决和pkt有关的命名问题
-                # drop the pkt if the dst belong to the router itself
+        # drop the pkt if the dst belong to the router itself
         if ipv4_pkt.dst in self.ipaddrs:
-            if ipv4_pkt.protocol == ICMP && ipv4_pkt.get_header(ICMP).icmptype == EchoRequest:
+            if ipv4_pkt.protocol == IPProtocol.ICMP and ipv4_pkt.get_header(
+                    ICMP).icmptype == ICMPType.EchoRequest:
                 # TODO 正常发出echoreply，代码在下方已实现
                 # TODO 这里应该可以递归调用吧？  另，如果找不到匹配项见问答截图
+                icmp = ipv4_pkt.get_header(ICMP)
+                tmp_icmp = icmp()
+                tmp_icmp.icmptype = ICMPType.EchoReply
+                tmp_icmp.icmpdata = icmp.icmpdata
+                # tmp_icmp.icmpdata.sequence = icmp.icmpdata.sequence
+                # tmp_icmp.icmpdata.identifier = icmp.icmpdata.identifier
+                # tmp_icmp.icmpdata.data = icmp.icmpdata.data
+                tmp_ip = IPv4()
+                tmp_ip.src = input_intf.ipaddr
+                tmp_ip.dst = ipv4_pkt.src
+                tmp_ip.protocol = IPProtocol.ICMP
+                tmp_ip.ttl = 64
+                tmp_ip += tmp_icmp
+                ipv4_handle(tmp_ip, input_intf)
             else:
-                # case4
+                # TODO  error case4
+                self.send_icmp_error_pkt(4, ipv4_pkt, input_intf)
+                return
 
         else:
             # denote the longest prefix match so far
@@ -78,62 +142,52 @@ class Router(object):
             # denote the updated matched entry
             matched_entry = []
             for entry in self.fwd_tab:
-                prefixnet = IPv4Network(entry[0] + '/' + entry[1], strict=False)
-                if (ipv4_pkt.dst in prefixnet) and (longest < prefixnet.prefixlen):
+                prefixnet = IPv4Network(entry[0] + '/' + entry[1],
+                                        strict=False)
+                if (ipv4_pkt.dst in prefixnet) and (longest <
+                                                    prefixnet.prefixlen):
                     longest = prefixnet.prefixlen
                     matched_entry = entry
             if matched_entry == []:
-                #case1
-            # drop the pkt if no matches found
+                #TODO error case1
+                self.send_icmp_error_pkt(1, ipv4_pkt, input_intf)
+                return
+            # TODO 判断ttl的合法性 pkt要修改 case2
+            ipv4_pkt.get_header(IPv4).ttl -= 1
+            # error case2
+            if ipv4_pkt.get_header(IPv4).ttl <= 0:
+                self.send_icmp_error_pkt(2, ipv4_pkt, input_intf)
+                return
+            intf = self.net.interface_by_name(matched_entry[3])
+            # 1. the dst is within the subnet to which the intf belong,
+            #    which means the next hop is the dst
+            if matched_entry[2] == '0.0.0.0':
+                next_hop_ip = ipv4_pkt.dst
+            # 2. the next hop is an IP address on a router through which the destination is reachable
             else:
-                # TODO 判断ttl的合法性 pkt要修改 case2
-                pkt.get_header(IPv4).ttl -= 1
-                intf = self.net.interface_by_name(matched_entry[3])
-                # 1. the dst is within the subnet to which the intf belong,
-                #    which means the next hop is the dst
-                if matched_entry[2] == '0.0.0.0':
-                    next_hop_ip = ipv4_pkt.dst
-                # 2. the next hop is an IP address on a router through which the destination is reachable
-                else:
-                    next_hop_ip = IPv4Address(matched_entry[2])
-                # if the IP-MAC pair is already recorded in the ARP cache table,
-                # then no need for an ARP request
-                if next_hop_ip in self.arp_tab:
-                    dst_macaddr = self.arp_tab[next_hop_ip]
-                    pkt.get_header(Ethernet).src = intf.ethaddr
-                    pkt.get_header(Ethernet).dst = dst_macaddr
-                    self.net.send_packet(matched_entry[3], pkt)
-                # ARP request is necessary when none recorded
-                else:
-                    # create a new ARP request using the handy API
-                    arp_rqst = create_ip_arp_request(intf.ethaddr, intf.ipaddr, next_hop_ip)
-                    self.net.send_packet(matched_entry[3], arp_rqst)
-                    # add this request into waiting queue
-                    new_entry = [next_hop_ip, time.time(), 1, matched_entry, pkt, arp_rqst]
-                    self.wait_q.append(new_entry)
+                next_hop_ip = IPv4Address(matched_entry[2])
+            # if the IP-MAC pair is already recorded in the ARP cache table,
+            # then no need for an ARP request
+            if next_hop_ip in self.arp_tab:
+                dst_macaddr = self.arp_tab[next_hop_ip]
+                ipv4_pkt.get_header(Ethernet).src = intf.ethaddr
+                ipv4_pkt.get_header(Ethernet).dst = dst_macaddr
+                self.net.send_packet(matched_entry[3], ipv4_pkt)
+            # ARP request is necessary when none recorded
+            else:
+                # create a new ARP request using the handy API
+                arp_req = create_ip_arp_request(intf.ethaddr, intf.ipaddr,
+                                                next_hop_ip)
+                self.net.send_packet(matched_entry[3], arp_req)
+                # add this request into waiting queue
+                new_entry = [
+                    next_hop_ip,
+                    time.time(), 1, matched_entry, ipv4_pkt, arp_req,
+                    input_intf
+                ]
+                self.wait_q.append(new_entry)
 
-
-    def case1(self):
-        '''
-        ICMP error case 1: no match in forwarding table found
-        '''
-
-    def case2(self):
-        '''
-        ICMP error case 2: TTL become zero
-        '''
-
-    def case3(self):
-        '''
-        ICMP error case 3: no ARP reply received
-        '''    
-
-    def case4(self):
-        '''
-        ICMP error case 4: dst belong to the router itself while it's not an ICMP echo request
-        '''         
-
-    def router_main(self):    
+    def router_main(self):
         '''
         Main method for router; we stay in a loop in this method, 
         receiving packets until the end of time.
@@ -141,32 +195,37 @@ class Router(object):
         while True:
             gotpkt = True
             try:
-                timestamp,dev,pkt = self.net.recv_packet(timeout=1.0)
+                timestamp, dev, pkt = self.net.recv_packet(timeout=1.0)
             except NoPackets:
                 log_debug("No packets available in recv_packet")
                 gotpkt = False
             except Shutdown:
                 log_debug("Got shutdown signal")
                 break
-            
 
             if gotpkt:
                 log_debug("Got a packet: {}".format(str(pkt)))
-                # create the current input interface obj for future convenient use 
+                # create the current input interface obj for future convenient use
                 intf_obj = self.net.interface_by_name(dev)
+                pkt_type = pkt.ethertype
+
                 # 1. handle ARP packets
-                arp = pkt.get_header(Arp)
-                if (arp):
+                if (pkt_type == EtherType.ARP):
+                    arp = pkt.get_header(Arp)
                     # code in Lab 3
                     if (arp.operation == ArpOperation.Request):
                         # add a new entry into the ARP cache table or just update a recorded one
                         self.arp_tab[arp.senderprotoaddr] = arp.senderhwaddr
-                        log_info("Cached ARP table updated: {}".format(str(self.arp_tab)))
+                        log_info("Cached ARP table updated: {}".format(
+                            str(self.arp_tab)))
 
                         # drop it if target ip does not exist here
                         if arp.targetprotoaddr in self.ipaddrs:
-                            wanted_macaddr = self.net.interface_by_ipaddr(arp.targetprotoaddr).ethaddr
-                            arp_reply = create_ip_arp_reply(wanted_macaddr, arp.senderhwaddr, arp.targetprotoaddr, arp.senderprotoaddr)
+                            wanted_macaddr = self.net.interface_by_ipaddr(
+                                arp.targetprotoaddr).ethaddr
+                            arp_reply = create_ip_arp_reply(
+                                wanted_macaddr, arp.senderhwaddr,
+                                arp.targetprotoaddr, arp.senderprotoaddr)
                             self.net.send_packet(dev, arp_reply)
                     elif (arp.operation == ArpOperation.Reply):
                         # handle ARP replies to one of my requests stuck in the waiting queue
@@ -178,72 +237,83 @@ class Router(object):
                         for entry in self.wait_q[:]:
                             if cur_ip == entry[0]:
                                 # change the Ethernet header of the packet(src and dst)
-                                entry[4].get_header(Ethernet).src = self.net.interface_by_name((entry[3])[3]).ethaddr
+                                entry[4].get_header(
+                                    Ethernet).src = self.net.interface_by_name(
+                                        (entry[3])[3]).ethaddr
                                 entry[4].get_header(Ethernet).dst = cur_mac
                                 self.net.send_packet((entry[3])[3], entry[4])
                                 # remove the entry from the waiting queue
                                 self.wait_q.remove(entry)
                                 break
                 # 2. handle IPv4 packets
-                ipv4 = pkt.get_header(IPv4)
-                if (ipv4):
-                    if ipv4.protocol == ICMP:
-                        icmp = ipv4.get_header(ICMP)
-                        if ipv4.dst in self.ipaddrs:
-                            if icmp.icmptype == EchoRequest:
-                                tmp_icmp = icmp()
-                                tmp_icmp.icmptype = EchoReply
-                                tmp_icmp.icmpdata.sequence = icmp.icmpdata.sequence
-                                tmp_icmp.icmpdata.identifier = icmp.icmpdata.identifier
-                                tmp_icmp.icmpdata.data = icmp.icmpdata.data
-                                tmp_ip = IPv4()
-                                tmp_ip.src = intf_obj.ipaddr
-                                tmp_ip.dst = ipv4.src
-                                tmp_ip.protocol = ICMP
-                                tmp_ip.ttl = 64
-                                tmp_ip += tmp_icmp
-                                # TODO
-                                self.ipv4_handle(tmp_ip)
-                                
-                    # drop the pkt if the dst belong to the router itself
-                    if ipv4.dst not in self.ipaddrs:
-                        # denote the longest prefix match so far
-                        longest = 0
-                        # denote the updated matched entry
-                        matched_entry = []
-                        for entry in self.fwd_tab:
-                            prefixnet = IPv4Network(entry[0] + '/' + entry[1], strict=False)
-                            if (ipv4.dst in prefixnet) and (longest < prefixnet.prefixlen):
-                                longest = prefixnet.prefixlen
-                                matched_entry = entry
-                        # drop the pkt if no matches found
-                        if matched_entry != [] :
-                            # assume ttl >= 0
-                            pkt.get_header(IPv4).ttl -= 1
-                            intf = self.net.interface_by_name(matched_entry[3])
-                            # 1. the dst is within the subnet to which the intf belong,
-                            #    which means the next hop is the dst
-                            if matched_entry[2] == '0.0.0.0':
-                                next_hop_ip = ipv4.dst
-                            # 2. the next hop is an IP address on a router through which the destination is reachable
-                            else:
-                                next_hop_ip = IPv4Address(matched_entry[2])
-                            # if the IP-MAC pair is already recorded in the ARP cache table,
-                            # then no need for an ARP request
-                            if next_hop_ip in self.arp_tab:
-                                dst_macaddr = self.arp_tab[next_hop_ip]
-                                pkt.get_header(Ethernet).src = intf.ethaddr
-                                pkt.get_header(Ethernet).dst = dst_macaddr
-                                self.net.send_packet(matched_entry[3], pkt)
-                            # ARP request is necessary when none recorded
-                            else:
-                                # create a new ARP request using the handy API
-                                arp_rqst = create_ip_arp_request(intf.ethaddr, intf.ipaddr, next_hop_ip)
-                                self.net.send_packet(matched_entry[3], arp_rqst)
-                                # add this request into waiting queue
-                                new_entry = [next_hop_ip, time.time(), 1, matched_entry, pkt, arp_rqst]
-                                self.wait_q.append(new_entry)
-            # when no pkt is received, especially ARP
+                elif (pkt_type == EtherType.IPv4):
+                    ipv4 = pkt.get_header(IPv4)
+                    self.ipv4_handle(ipv4, intf_obj)
+                    # if ipv4.protocol == IPProtocol.ICMP:
+                    #     icmp = ipv4.get_header(ICMP)
+                    #     if ipv4.dst in self.ipaddrs:
+                    #         if icmp.icmptype == ICMPType.EchoRequest:
+                    #             tmp_icmp = icmp()
+                    #             tmp_icmp.icmptype = ICMPType.EchoReply
+                    #             tmp_icmp.icmpdata.sequence = icmp.icmpdata.sequence
+                    #             tmp_icmp.icmpdata.identifier = icmp.icmpdata.identifier
+                    #             tmp_icmp.icmpdata.data = icmp.icmpdata.data
+                    #             tmp_ip = IPv4()
+                    #             tmp_ip.src = intf_obj.ipaddr
+                    #             tmp_ip.dst = ipv4.src
+                    #             tmp_ip.protocol = ICMP
+                    #             tmp_ip.ttl = 64
+                    #             tmp_ip += tmp_icmp
+                    #             # TODO
+                    #             self.ipv4_handle(tmp_ip)
+
+                    # # drop the pkt if the dst belong to the router itself
+                    # if ipv4.dst not in self.ipaddrs:
+                    #     # denote the longest prefix match so far
+                    #     longest = 0
+                    #     # denote the updated matched entry
+                    #     matched_entry = []
+                    #     for entry in self.fwd_tab:
+                    #         prefixnet = IPv4Network(entry[0] + '/' + entry[1],
+                    #                                 strict=False)
+                    #         if (ipv4.dst in prefixnet) and (
+                    #                 longest < prefixnet.prefixlen):
+                    #             longest = prefixnet.prefixlen
+                    #             matched_entry = entry
+                    #     # drop the pkt if no matches found
+                    #     if matched_entry != []:
+                    #         # assume ttl >= 0
+                    #         pkt.get_header(IPv4).ttl -= 1
+                    #         intf = self.net.interface_by_name(matched_entry[3])
+                    #         # 1. the dst is within the subnet to which the intf belong,
+                    #         #    which means the next hop is the dst
+                    #         if matched_entry[2] == '0.0.0.0':
+                    #             next_hop_ip = ipv4.dst
+                    #         # 2. the next hop is an IP address on a router through which the destination is reachable
+                    #         else:
+                    #             next_hop_ip = IPv4Address(matched_entry[2])
+                    #         # if the IP-MAC pair is already recorded in the ARP cache table,
+                    #         # then no need for an ARP request
+                    #         if next_hop_ip in self.arp_tab:
+                    #             dst_macaddr = self.arp_tab[next_hop_ip]
+                    #             pkt.get_header(Ethernet).src = intf.ethaddr
+                    #             pkt.get_header(Ethernet).dst = dst_macaddr
+                    #             self.net.send_packet(matched_entry[3], pkt)
+                    #         # ARP request is necessary when none recorded
+                    #         else:
+                    #             # create a new ARP request using the handy API
+                    #             arp_rqst = create_ip_arp_request(
+                    #                 intf.ethaddr, intf.ipaddr, next_hop_ip)
+                    #             self.net.send_packet(matched_entry[3],
+                    #                                  arp_rqst)
+                    #             # add this request into waiting queue
+                    #             new_entry = [
+                    #                 next_hop_ip,
+                    #                 time.time(), 1, matched_entry, pkt,
+                    #                 arp_rqst, intf_obj
+                    #             ]
+                    #             self.wait_q.append(new_entry)
+            # when no pkt is received, especially ARP reply
             else:
                 # update every entry state in the waiting queue
                 for entry in self.wait_q[:]:
@@ -251,7 +321,10 @@ class Router(object):
                     if time.time() - entry[1] > 1:
                         # ARP request already sent exactly 5 times
                         if (entry[2] >= 5):
-                            # TODO case3 ARP failure
+                            # TODO error case3 ARP failure
+                            self.send_icmp_error_pkt(3,
+                                                     entry[4].get_header(IPv4),
+                                                     entry[6])
                             self.wait_q.remove(entry)
                         # still be able to send ARP request
                         else:
@@ -259,8 +332,8 @@ class Router(object):
                             entry[2] += 1
                             self.net.send_packet((entry[3])[3], entry[5])
 
-def main(net):
 
+def main(net):
     '''
     Main entry point for router.  Just create Router
     object and get it going.
