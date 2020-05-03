@@ -84,7 +84,9 @@ class Router(object):
         tmp_ip.src = input_intf.ipaddr
         tmp_ip.dst = ipv4_pkt.src
 
-        icmp = ipv4_pkt.get_header(ICMP)
+        tmp = Packet()
+        tmp += ipv4_pkt
+        icmp = tmp.get_header(ICMP)
         # ICMP error case 1: no match in forwarding table found
         if error_case == 1:
             tmp_icmp.icmptype = ICMPType.DestinationUnreachable
@@ -102,35 +104,39 @@ class Router(object):
             tmp_icmp.icmptype = ICMPType.DestinationUnreachable
             tmp_icmp.icmpcode = 3
 
-        new_ipv4_pkt = tmp_ip + tmp_icmp
+        new_ipv4_pkt = Packet()
+        new_ipv4_pkt = Ethernet() + tmp_ip + tmp_icmp
         ipv4_handle(new_ipv4_pkt, input_intf)
 
-    def ipv4_handle(self, ipv4_pkt, input_intf):
+    def ipv4_handle(self, pkt, input_intf):
         '''
         Handle the IPv4 forwarding job of the router
         in order to simplify the code
         '''
+        ipv4_pkt = pkt.get_header(IPv4)
         # TODO 解决和pkt有关的命名问题
         # drop the pkt if the dst belong to the router itself
         if ipv4_pkt.dst in self.ipaddrs:
-            if ipv4_pkt.protocol == IPProtocol.ICMP and ipv4_pkt.get_header(
+            if ipv4_pkt.protocol == IPProtocol.ICMP and pkt.get_header(
                     ICMP).icmptype == ICMPType.EchoRequest:
                 # TODO 正常发出echoreply，代码在下方已实现
                 # TODO 这里应该可以递归调用吧？  另，如果找不到匹配项见问答截图
-                icmp = ipv4_pkt.get_header(ICMP)
-                tmp_icmp = icmp()
+                ori_icmp = pkt.get_header(ICMP)
+                tmp_icmp = ICMP()
                 tmp_icmp.icmptype = ICMPType.EchoReply
-                tmp_icmp.icmpdata = icmp.icmpdata
+                tmp_icmp.icmpdata = ori_icmp.icmpdata
                 # tmp_icmp.icmpdata.sequence = icmp.icmpdata.sequence
                 # tmp_icmp.icmpdata.identifier = icmp.icmpdata.identifier
                 # tmp_icmp.icmpdata.data = icmp.icmpdata.data
-                tmp_ip = IPv4()
-                tmp_ip.src = input_intf.ipaddr
-                tmp_ip.dst = ipv4_pkt.src
-                tmp_ip.protocol = IPProtocol.ICMP
-                tmp_ip.ttl = 64
-                tmp_ip += tmp_icmp
-                ipv4_handle(tmp_ip, input_intf)
+                tmp_ipv4 = IPv4()
+                tmp_ipv4.src = input_intf.ipaddr
+                tmp_ipv4.dst = pkt.src
+                tmp_ipv4.protocol = IPProtocol.ICMP
+                tmp_ipv4.ttl = 64
+
+                new_pkt = Packet()
+                new_pkt = Ethernet() + tmp_ipv4 + tmp_icmp
+                ipv4_handle(new_pkt, input_intf)
             else:
                 # TODO  error case4
                 self.send_icmp_error_pkt(4, ipv4_pkt, input_intf)
@@ -144,25 +150,24 @@ class Router(object):
             for entry in self.fwd_tab:
                 prefixnet = IPv4Network(entry[0] + '/' + entry[1],
                                         strict=False)
-                if (ipv4_pkt.dst in prefixnet) and (longest <
-                                                    prefixnet.prefixlen):
+                if (pkt.dst in prefixnet) and (longest < prefixnet.prefixlen):
                     longest = prefixnet.prefixlen
                     matched_entry = entry
             if matched_entry == []:
                 #TODO error case1
-                self.send_icmp_error_pkt(1, ipv4_pkt, input_intf)
+                self.send_icmp_error_pkt(1, pkt, input_intf)
                 return
             # TODO 判断ttl的合法性 pkt要修改 case2
-            ipv4_pkt.get_header(IPv4).ttl -= 1
+            pkt.get_header(IPv4).ttl -= 1
             # error case2
-            if ipv4_pkt.get_header(IPv4).ttl <= 0:
-                self.send_icmp_error_pkt(2, ipv4_pkt, input_intf)
+            if pkt.get_header(IPv4).ttl <= 0:
+                self.send_icmp_error_pkt(2, pkt, input_intf)
                 return
             intf = self.net.interface_by_name(matched_entry[3])
             # 1. the dst is within the subnet to which the intf belong,
             #    which means the next hop is the dst
             if matched_entry[2] == '0.0.0.0':
-                next_hop_ip = ipv4_pkt.dst
+                next_hop_ip = pkt.dst
             # 2. the next hop is an IP address on a router through which the destination is reachable
             else:
                 next_hop_ip = IPv4Address(matched_entry[2])
@@ -170,9 +175,9 @@ class Router(object):
             # then no need for an ARP request
             if next_hop_ip in self.arp_tab:
                 dst_macaddr = self.arp_tab[next_hop_ip]
-                ipv4_pkt.get_header(Ethernet).src = intf.ethaddr
-                ipv4_pkt.get_header(Ethernet).dst = dst_macaddr
-                self.net.send_packet(matched_entry[3], ipv4_pkt)
+                pkt.get_header(Ethernet).src = intf.ethaddr
+                pkt.get_header(Ethernet).dst = dst_macaddr
+                self.net.send_packet(matched_entry[3], pkt)
             # ARP request is necessary when none recorded
             else:
                 # create a new ARP request using the handy API
@@ -182,8 +187,7 @@ class Router(object):
                 # add this request into waiting queue
                 new_entry = [
                     next_hop_ip,
-                    time.time(), 1, matched_entry, ipv4_pkt, arp_req,
-                    input_intf
+                    time.time(), 1, matched_entry, pkt, arp_req, input_intf
                 ]
                 self.wait_q.append(new_entry)
 
@@ -207,7 +211,7 @@ class Router(object):
                 log_debug("Got a packet: {}".format(str(pkt)))
                 # create the current input interface obj for future convenient use
                 intf_obj = self.net.interface_by_name(dev)
-                pkt_type = pkt.ethertype
+                pkt_type = pkt[Ethernet].ethertype
 
                 # 1. handle ARP packets
                 if (pkt_type == EtherType.ARP):
