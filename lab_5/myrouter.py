@@ -111,13 +111,10 @@ class Router(object):
         in order to simplify the code
         '''
         ipv4_pkt = pkt.get_header(IPv4)
-        # TODO 解决和pkt有关的命名问题
         # drop the pkt if the dst belong to the router itself
         if ipv4_pkt.dst in self.ipaddrs:
             if ipv4_pkt.protocol == IPProtocol.ICMP and pkt.get_header(
                     ICMP).icmptype == ICMPType.EchoRequest:
-                # TODO 正常发出echoreply，代码在下方已实现
-                # TODO 这里应该可以递归调用吧？  另，如果找不到匹配项见问答截图
                 # error case2
                 if ipv4_pkt.ttl - 1 <= 0:
                     self.send_icmp_error_pkt(2, pkt, input_intf)
@@ -125,7 +122,6 @@ class Router(object):
                 ori_icmp = pkt.get_header(ICMP)
                 tmp_icmp = ICMP()
                 tmp_icmp.icmptype = ICMPType.EchoReply
-                # tmp_icmp.icmpdata = ori_icmp.icmpdata
                 tmp_icmp.icmpdata.sequence = ori_icmp.icmpdata.sequence
                 tmp_icmp.icmpdata.identifier = ori_icmp.icmpdata.identifier
                 tmp_icmp.icmpdata.data = ori_icmp.icmpdata.data
@@ -263,7 +259,7 @@ class Router(object):
                     if time.time() - entry[1] > 1:
                         # ARP request already sent exactly 5 times
                         if (entry[2] >= 5):
-                            # TODO error case3 ARP failure
+                            # error case3
                             self.send_icmp_error_pkt(3, entry[4], entry[6])
                             self.wait_q.remove(entry)
                         # still be able to send ARP request
