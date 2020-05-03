@@ -70,7 +70,7 @@ class Router(object):
         match = False
         for entry in self.fwd_tab:
             prefixnet = IPv4Network(entry[0] + '/' + entry[1], strict=False)
-            if ipv4_pkt.dst in prefixnet:
+            if ipv4_pkt.src in prefixnet:
                 match = True
                 break
         if match == False:
@@ -95,7 +95,7 @@ class Router(object):
         elif error_case == 3:
             tmp_icmp.icmptype = ICMPType.DestinationUnreachable
             tmp_icmp.icmpcode = 1
-        # ICMP error case 4: dst belong to the router itself while it's not an ICMP echo request
+        # ICMP error case 4: dst ip belong to the router itself while it's not an ICMP echo request
         elif error_case == 4:
             tmp_icmp.icmptype = ICMPType.DestinationUnreachable
             tmp_icmp.icmpcode = 3
@@ -118,6 +118,10 @@ class Router(object):
                     ICMP).icmptype == ICMPType.EchoRequest:
                 # TODO 正常发出echoreply，代码在下方已实现
                 # TODO 这里应该可以递归调用吧？  另，如果找不到匹配项见问答截图
+                # error case2
+                if ipv4_pkt.ttl - 1 <= 0:
+                    self.send_icmp_error_pkt(2, pkt, input_intf)
+                    return
                 ori_icmp = pkt.get_header(ICMP)
                 tmp_icmp = ICMP()
                 tmp_icmp.icmptype = ICMPType.EchoReply
