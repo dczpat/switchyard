@@ -61,10 +61,8 @@ class Router(object):
 
     def send_icmp_error_pkt(self, error_case, pkt, input_intf):
         '''
-        put together all 4 error cases together to simplify code
+        put together all 4 error cases to simplify code
         '''
-        # if ipv4_pkt.src not in self.ipaddrs:
-        #     return
         # drop the pkt if another 'error' occurs with the error icmp pkt
         ipv4_pkt = pkt.get_header(IPv4)
         match = False
@@ -75,7 +73,7 @@ class Router(object):
                 break
         if match == False:
             return
-
+        # create the error pkt
         tmp_icmp = ICMP()
         tmp_ip = IPv4()
         tmp_ip.protocol = IPProtocol.ICMP
@@ -111,7 +109,7 @@ class Router(object):
         in order to simplify the code
         '''
         ipv4_pkt = pkt.get_header(IPv4)
-        # drop the pkt if the dst belong to the router itself
+        # if the dst belongs to the router itself
         if ipv4_pkt.dst in self.ipaddrs:
             if ipv4_pkt.protocol == IPProtocol.ICMP and pkt.get_header(
                     ICMP).icmptype == ICMPType.EchoRequest:
@@ -119,12 +117,14 @@ class Router(object):
                 if ipv4_pkt.ttl - 1 <= 0:
                     self.send_icmp_error_pkt(2, pkt, input_intf)
                     return
+                # create ICMP reply
                 ori_icmp = pkt.get_header(ICMP)
                 tmp_icmp = ICMP()
                 tmp_icmp.icmptype = ICMPType.EchoReply
                 tmp_icmp.icmpdata.sequence = ori_icmp.icmpdata.sequence
                 tmp_icmp.icmpdata.identifier = ori_icmp.icmpdata.identifier
                 tmp_icmp.icmpdata.data = ori_icmp.icmpdata.data
+
                 tmp_ipv4 = IPv4()
                 tmp_ipv4.src = input_intf.ipaddr
                 tmp_ipv4.dst = ipv4_pkt.src
@@ -134,8 +134,8 @@ class Router(object):
                 new_pkt = Packet()
                 new_pkt = Ethernet() + tmp_ipv4 + tmp_icmp
                 self.ipv4_handle(new_pkt, input_intf)
+            # error case4
             else:
-                # TODO  error case4
                 self.send_icmp_error_pkt(4, pkt, input_intf)
                 return
 
@@ -151,15 +151,16 @@ class Router(object):
                                                     prefixnet.prefixlen):
                     longest = prefixnet.prefixlen
                     matched_entry = entry
+            # error case1
             if matched_entry == []:
-                #TODO error case1
                 self.send_icmp_error_pkt(1, pkt, input_intf)
                 return
-            # TODO 判断ttl的合法性 pkt要修改 case2
             # error case2
             if ipv4_pkt.ttl - 1 <= 0:
                 self.send_icmp_error_pkt(2, pkt, input_intf)
                 return
+
+            # mainly job in lab_4
             ipv4_pkt.ttl -= 1
             intf = self.net.interface_by_name(matched_entry[3])
             # 1. the dst is within the subnet to which the intf belong,
