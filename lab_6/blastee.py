@@ -12,10 +12,12 @@ class Blastee:
         '''
         init some useful information
         '''
+        self.pkt_cnt = 0
+
         input_file = open('blastee_params.txt', 'r')
-        tmp = input_file.readline().split()
-        self.blaster_IP = str(tmp[1])  # useless actually
-        self.num = int(tmp[3])
+        params = input_file.readline().split()
+        self.blaster_IP = str(params[1])  # useless actually
+        self.num = int(params[3])
 
         self.macs = {}
         self.macs['blaster'] = '10:00:00:00:00:01'
@@ -57,6 +59,8 @@ def switchy_main(net):
 
     while True:
         gotpkt = True
+        if blastee.pkt_cnt == blastee.num:
+            break
         try:
             timestamp, dev, pkt = net.recv_packet()
             log_debug("Device is {}".format(dev))
@@ -70,6 +74,7 @@ def switchy_main(net):
         if gotpkt:
             log_debug("I got a packet from {}".format(dev))
             log_debug("Pkt: {}".format(pkt))
+            blastee.pkt_cnt += 1
 
             new_pkt = blastee.mk_ack(pkt)
             net.send_packet(dev, new_pkt)
