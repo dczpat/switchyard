@@ -24,16 +24,16 @@ class MiddleBox:
         self.macs['mb2blastee'] = '40:00:00:00:00:02'
 
         self.ips = {}
-        self.ips[blaster] = '192.168.100.1'
-        self.ips[blastee] = '192.168.200.1'
-        self.ips[mb2blaster] = '192.168.100.2'
-        self.ips[mb2blastee] = '192.168.200.2'
+        self.ips['blaster'] = '192.168.100.1'
+        self.ips['blastee'] = '192.168.200.1'
+        self.ips['mb2blaster'] = '192.168.100.2'
+        self.ips['mb2blastee'] = '192.168.200.2'
 
     def drop_now(self):
         '''
         decide whether to drop the pkt
         '''
-        if random() < drop_rate:
+        if random() < self.drop_rate:
             return True
         else:
             return False
@@ -45,6 +45,7 @@ def switchy_main(net):
     mymacs = [intf.ethaddr for intf in my_intf]
     myips = [intf.ipaddr for intf in my_intf]
     mb = MiddleBox()
+    print("drop rate: {}".format(mb.drop_rate))
 
     while True:
         gotpkt = True
