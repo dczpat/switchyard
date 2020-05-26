@@ -14,6 +14,10 @@ class MiddleBox:
         '''
         init some useful information
         '''
+        # number of total pkts received from blaster
+        self.total_pkt = 0
+        # number of pkts forwarded to blastee
+        self.fwd_pkt = 0
         input_file = open('middlebox_params.txt', 'r')
         self.drop_rate = float(input_file.readline().split()[1])
 
@@ -45,7 +49,7 @@ def switchy_main(net):
     mymacs = [intf.ethaddr for intf in my_intf]
     myips = [intf.ipaddr for intf in my_intf]
     mb = MiddleBox()
-    print("drop rate: {}".format(mb.drop_rate))
+    #print("drop rate: {}".format(mb.drop_rate))
 
     while True:
         gotpkt = True
@@ -63,6 +67,7 @@ def switchy_main(net):
             log_debug("I got a packet {}".format(pkt))
 
             if dev == "middlebox-eth0":
+                mb.total_pkt += 1
                 log_debug("Received from blaster")
                 '''
                 Received data packet
@@ -70,6 +75,7 @@ def switchy_main(net):
                 If not, modify headers & send to blastee
                 '''
                 if not mb.drop_now():
+                    mb.fwd_pkt += 1
                     pkt[Ethernet].src = mb.macs['mb2blastee']
                     pkt[Ethernet].dst = mb.macs['blastee']
                     net.send_packet("middlebox-eth1", pkt)
@@ -84,5 +90,5 @@ def switchy_main(net):
                 net.send_packet("middlebox-eth0", pkt)
             else:
                 log_debug("Oops :))")
-
+    #log_info('Actual drop rate is: {}'.format(1 - float(mb.fwd_pkt) / mb.total_pkt))
     net.shutdown()

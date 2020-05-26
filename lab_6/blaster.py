@@ -14,10 +14,15 @@ class Blaster:
         '''
         self.lhs = 1
         self.rhs = 0
+        # acked pkts' seq_num
         self.acked = []
+        # the last timestamp when lhs is sent
         self.lhs_send_time = 0.0
+        # the timestamp when first pkt is sent
         self.start = 0.0
+        # the total cnt of pkts resent
         self.retrans = 0
+        # the total cnt of timeouts
         self.to_times = 0
 
         input_file = open('blaster_params.txt', 'r')
@@ -29,12 +34,6 @@ class Blaster:
         self.to = float(params[9]) / 1000
         self.recv_to = float(params[11]) / 1000
 
-        print(self.blastee_IP)
-        print(self.num)
-        print(self.len)
-        print(self.sw)
-        print(self.to)
-        print(self.recv_to)
         self.macs = {}
         self.macs['blaster'] = '10:00:00:00:00:01'
         self.macs['blastee'] = '20:00:00:00:00:01'
@@ -56,19 +55,11 @@ class Blaster:
         hdr[Ethernet].dst = self.macs['mb2blaster']
         hdr[IPv4].src = self.ips['blaster']
         hdr[IPv4].dst = self.ips['blastee']
-
-        # if is_new:
-        #     #self.rhs += 1
-        #     print('rhs:', self.rhs)
-        #     if self.rhs == 1:
-        #         self.lhs_send_time = time.time()
-        #         self.start = self.lhs_send_time
-        #         print('here', self.start)
-
+        # transform data into rawbyte format
         seq_num = seq_num.to_bytes(4, 'big')
         length = self.len.to_bytes(2, 'big')
         payload = bytes(self.len)
-
+        # add up the 3 parts above
         return hdr + seq_num + length + payload
 
 
@@ -77,7 +68,6 @@ def switchy_main(net):
     mymacs = [intf.ethaddr for intf in my_intf]
     myips = [intf.ipaddr for intf in my_intf]
     blaster = Blaster()
-    print(blaster)
 
     while True:
         gotpkt = True
@@ -97,20 +87,25 @@ def switchy_main(net):
                 continue
             ack_seq = int.from_bytes((pkt[RawPacketContents].to_bytes())[:4],
                                      'big')
+            #print("ack!!!!", ack_seq)
+            # add new 'seq_num' to acked[]
             if ack_seq not in blaster.acked:
                 blaster.acked.append(ack_seq)
-                print("ack!!!!!!!!!!!", ack_seq)
 
             if ack_seq == blaster.lhs:
+                '''
+                1. change 'lhs' to the most right postion
+                    where all pkts to the left have been acked
+                2. decide whether to end blaster according to 'num'
+                '''
                 blaster.lhs += 1
-                #print("ack!", blaster.lhs)
                 if blaster.lhs - 1 == blaster.num:
-                    print('end!!!!!')
+                    #print('end!!!!')
                     break
                 while blaster.lhs in blaster.acked:
                     blaster.lhs += 1
                     if blaster.lhs - 1 == blaster.num:
-                        print('end!!!!!')
+                        #print('end!!!!')
                         break
         else:
             log_debug("Didn't receive anything")
@@ -121,24 +116,24 @@ def switchy_main(net):
                     blaster.lhs_send_time = time.time()
                     blaster.start = blaster.lhs_send_time
                 if blaster.rhs <= blaster.num:
-                    print('send new pkt!!!!', blaster.rhs)
+                    #print('send new pkt!!!!', blaster.rhs)
                     net.send_packet('blaster-eth0',
                                     blaster.mk_pkt(blaster.rhs))
 
-            # check timeout for lhs and resend
+            # check timeout for lhs
             if time.time() - blaster.lhs_send_time > blaster.to:
+                # update key info
                 blaster.to_times += 1
+                #print('{} timeouts!!!!'.format(blaster.to_times))
                 blaster.lhs_send_time = time.time()
-                for x in range(blaster.lhs, min(blaster.rhs, blaster.num)):
+                # all pkts within sender window and non-acked should be resent
+                for x in range(blaster.lhs, min(blaster.rhs, blaster.num) + 1):
                     if x not in blaster.acked:
                         blaster.retrans += 1
-                        print('resend pkt!!!!', x)
+                        #print('resend pkt!!!!', x)
                         net.send_packet('blaster-eth0', blaster.mk_pkt(x))
 
     span = time.time() - blaster.start
-    print(time.time())
-    print(blaster.start)
-    print('\n\n\n')
     log_info("Total TX time: {}s".format(span))
     log_info("Number of reTX: {}".format(blaster.retrans))
     log_info("Number of coarse TOs: {}".format(blaster.to_times))
