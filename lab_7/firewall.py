@@ -26,11 +26,14 @@ class Rule:
             self.dst = line[7]
             self.dstport = line[9]
         if not self.deny:
-            self.impair = False
             if line[-2] == 'ratelimit':
                 self.rl = line[-1]
-            elif line[-1] == 'impair':
+            else:
+                self.rl = -1
+            if line[-1] == 'impair':
                 self.impair = True
+            else:
+                self.impair = False
 
 
 def gather_rules():
@@ -54,7 +57,7 @@ def compare_ip(x, y):
     compare two IPv4 addrs and see if y belong to x
     '''
     if x == 'any':
-        return False
+        return True
     x1 = int(IPv4Network(x, strict=False).network_address)
     y1 = int(IPv4Network(y, strict=False).network_address)
     if x1 & y1 == x1:
@@ -63,16 +66,62 @@ def compare_ip(x, y):
         return False
 
 
-def filter_pkt(rules, pkt):
+def compare_port(x, y):
+    '''
+    compare two port numbers and see if they match
+    '''
+    if x == 'any':
+        return True
+    return int(x) == y
+
+
+def is_matchable(rule, ip_pkt):
+    '''
+    see if this rule match the pkt
+    '''
+    if not (compare_ip(rule.src, ip_pkt.src)
+            and compare_ip(rule.dst, ip_pkt.dst)):
+        return False
+    if ip_pkt.has_header(UDP):
+        if not (compare_port(rule.srcport, ip_pkt[UDP].srcport)
+                and compare_port(rule.dstport, ip_pkt[UDP].dstport)):
+            return False
+    elif ip_pkt.has_header(TCP):
+        if not (compare_port(rule.srcport, ip_pkt[TCP].srcport)
+                and compare_port(rule.dstport, ip_pkt[TCP].dstport)):
+            return False
+    return True
+
+
+def filter_pkt(rules, pkt, net, output_port):
     '''
     filter the pkt according to the rules
     '''
     if not pkt.has_header(IPv4):
         return
-    ip = pkt[IPv4]
+    ip_pkt = pkt[IPv4]
     for rule in rules:
-        if rule.type not in pkt.headers():
+        if not (rule.type == EtherType.IPv4 or rule.type in pkt.headers()):
             continue
+        if not is_matchable(rule, ip_pkt):
+            continue
+        break
+    # no match found
+    if not rule:
+        net.send_packet(output_port, pkt)
+        return
+    # filter this pkt
+    if rule.deny:
+        return
+    if rule.rl == -1 and not rule.impair:
+        net.send_packet(output_port, pkt)
+        return
+    if rule.impair:
+        # TODO impair
+        pass
+    else:
+        # TODO ratelimit
+        pass
 
 
 def main(net):
@@ -96,6 +145,8 @@ def main(net):
             # rule tests.  It currently just forwards the packet
             # out the other port, but depending on the firewall rules
             # the packet may be dropped or mutilated.
+            # TODO is this dict right?
+            filter_pkt(rules, pkt, net, portpair[input_port])
             net.send_packet(portpair[input_port], pkt)
 
     net.shutdown()
