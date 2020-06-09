@@ -8,15 +8,15 @@ class Rule:
     '''
     def __init__(self, line):
         self.deny = (line[0] == 'deny')
-        self.type = line[1]
+        #self.type = line[1]
         if line[1] == 'ip':
-            self.type = EtherType.IPv4
+            self.type = 'IPv4'
         elif line[1] == 'icmp':
-            self.type = IPProtocol.ICMP
+            self.type = 'ICMP'
         elif line[1] == 'tcp':
-            self.type = IPProtocol.TCP
+            self.type = 'TCP'
         elif line[1] == 'udp':
-            self.type = IPProtocol.UDP
+            self.type = 'UDP'
         if line[1] == 'ip' or line[1] == 'icmp':
             self.src = line[3]
             self.dst = line[5]
@@ -60,10 +60,7 @@ def compare_ip(x, y):
         return True
     x1 = int(IPv4Network(x, strict=False).network_address)
     y1 = int(IPv4Network(y, strict=False).network_address)
-    if x1 & y1 == x1:
-        return True
-    else:
-        return False
+    return x1 & y1 == x1
 
 
 def compare_port(x, y):
@@ -75,20 +72,24 @@ def compare_port(x, y):
     return int(x) == y
 
 
-def is_matchable(rule, ip_pkt):
+def is_matchable(rule, pkt):
     '''
     see if this rule match the pkt
     '''
+    ip_pkt = pkt[IPv4]
     if not (compare_ip(rule.src, ip_pkt.src)
             and compare_ip(rule.dst, ip_pkt.dst)):
         return False
-    if ip_pkt.has_header(UDP):
-        if not (compare_port(rule.srcport, ip_pkt[UDP].srcport)
-                and compare_port(rule.dstport, ip_pkt[UDP].dstport)):
+    if rule.type == 'IPv4':
+        return True
+    #tmp_pkt = Packet() + ip_pkt
+    if ip_pkt.protocol == IPProtocol.UDP:
+        if not (compare_port(rule.srcport, pkt[UDP].src)
+                and compare_port(rule.dstport, pkt[UDP].dst)):
             return False
-    elif ip_pkt.has_header(TCP):
-        if not (compare_port(rule.srcport, ip_pkt[TCP].srcport)
-                and compare_port(rule.dstport, ip_pkt[TCP].dstport)):
+    elif ip_pkt.protocol == IPProtocol.TCP:
+        if not (compare_port(rule.srcport, pkt[TCP].src)
+                and compare_port(rule.dstport, pkt[TCP].dst)):
             return False
     return True
 
@@ -98,12 +99,13 @@ def filter_pkt(rules, pkt, net, output_port):
     filter the pkt according to the rules
     '''
     if not pkt.has_header(IPv4):
+        net.send_packet(output_port, pkt)
         return
     ip_pkt = pkt[IPv4]
     for rule in rules:
-        if not (rule.type == EtherType.IPv4 or rule.type in pkt.headers()):
+        if not (rule.type == 'IPv4' or rule.type in pkt.headers()):
             continue
-        if not is_matchable(rule, ip_pkt):
+        if not is_matchable(rule, pkt):
             continue
         break
     # no match found
@@ -113,15 +115,16 @@ def filter_pkt(rules, pkt, net, output_port):
     # filter this pkt
     if rule.deny:
         return
-    if rule.rl == -1 and not rule.impair:
-        net.send_packet(output_port, pkt)
-        return
-    if rule.impair:
-        # TODO impair
-        pass
-    else:
-        # TODO ratelimit
-        pass
+    net.send_packet(output_port, pkt)
+    # if rule.rl == -1 and not rule.impair:
+    #     net.send_packet(output_port, pkt)
+    #     return
+    # if rule.impair:
+    #     # TODO impair
+    #     net.send_packet(output_port, pkt)
+    # else:
+    #     # TODO ratelimit
+    #     net.send_packet(output_port, pkt)
 
 
 def main(net):
@@ -147,6 +150,6 @@ def main(net):
             # the packet may be dropped or mutilated.
             # TODO is this dict right?
             filter_pkt(rules, pkt, net, portpair[input_port])
-            net.send_packet(portpair[input_port], pkt)
+            # net.send_packet(portpair[input_port], pkt)
 
     net.shutdown()
