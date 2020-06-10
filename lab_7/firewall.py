@@ -36,6 +36,18 @@ class Rule:
                 self.impair = False
 
 
+class Bucket:
+    '''
+    designed for the token bucket algorithm
+    '''
+    def __init__(self, rl, pkt, size):
+        self.tokens = 2 * rl
+        self.rl = rl
+        self.time = time.time()
+        self.pkt = pkt
+        self.size = size
+
+
 def gather_rules():
     '''
     gather rules from 'firewall_rules.txt'
@@ -82,7 +94,6 @@ def is_matchable(rule, pkt):
         return False
     if rule.type == 'IPv4':
         return True
-    #tmp_pkt = Packet() + ip_pkt
     if ip_pkt.protocol == IPProtocol.UDP:
         if not (compare_port(rule.srcport, pkt[UDP].src)
                 and compare_port(rule.dstport, pkt[UDP].dst)):
@@ -94,10 +105,14 @@ def is_matchable(rule, pkt):
     return True
 
 
-def filter_pkt(rules, pkt, net, output_port):
+def filter_pkt(rules, pkt, net, output_port, bucket):
     '''
     filter the pkt according to the rules
     '''
+    if bucket != None and bucket.pkt == pkt and bucket.size <= bucket.tokens:
+        net.send_packet(output_port, pkt)
+        bucket = None
+
     if not pkt.has_header(IPv4):
         net.send_packet(output_port, pkt)
         return
@@ -116,15 +131,19 @@ def filter_pkt(rules, pkt, net, output_port):
     if rule.deny:
         return
     net.send_packet(output_port, pkt)
-    # if rule.rl == -1 and not rule.impair:
-    #     net.send_packet(output_port, pkt)
-    #     return
-    # if rule.impair:
-    #     # TODO impair
-    #     net.send_packet(output_port, pkt)
-    # else:
-    #     # TODO ratelimit
-    #     net.send_packet(output_port, pkt)
+    if rule.rl == -1 and not rule.impair:
+        net.send_packet(output_port, pkt)
+        return
+    if rule.impair:
+        # TODO impair
+        net.send_packet(output_port, pkt)
+    else:
+        # TODO ratelimit
+        size = len(pkt) - len(pkt[Ethernet])
+        bucket = Bucket(rule.rl, pkt)
+        if bucket.size <= bucket.tokens:
+            net.send_packet(output_port, pkt)
+            bucket = None
 
 
 def main(net):
@@ -132,11 +151,13 @@ def main(net):
     portnames = [p.name for p in net.ports()]
     portpair = dict(zip(portnames, portnames[::-1]))
     rules = gather_rules()
+    # todo
+    bucket = None
 
     while True:
         pkt = None
         try:
-            timestamp, input_port, pkt = net.recv_packet(timeout=0.5)
+            timestamp, input_port, pkt = net.recv_packet(timeout=0.25)
         except NoPackets:
             pass
         except Shutdown:
@@ -149,7 +170,10 @@ def main(net):
             # out the other port, but depending on the firewall rules
             # the packet may be dropped or mutilated.
             # TODO is this dict right?
-            filter_pkt(rules, pkt, net, portpair[input_port])
-            # net.send_packet(portpair[input_port], pkt)
+            if bucket != None and pkt == bucket.pkt and time.time(
+            ) - bucket.time >= 0.25:
+                bucket.tokens += bucket.rl / 4
+                bucket.time = time.time()
+            filter_pkt(rules, pkt, net, portpair[input_port], bucket)
 
     net.shutdown()
