@@ -1,5 +1,6 @@
 from switchyard.lib.userlib import *
 import time
+import random
 
 
 class Bucket:
@@ -10,9 +11,6 @@ class Bucket:
         # TODO
         self.tokens = 2 * rl
         self.rl = rl
-        #self.time = time.time()
-        #self.pkt = pkt
-        #self.size = size
 
 
 class Rule:
@@ -26,7 +24,7 @@ class Rule:
             self.rl = int(line[-1])
         else:
             self.rl = -1
-        #self.type = line[1]
+
         if line[1] == 'ip':
             self.type = 'IPv4'
         elif line[1] == 'icmp':
@@ -35,6 +33,7 @@ class Rule:
             self.type = 'TCP'
         elif line[1] == 'udp':
             self.type = 'UDP'
+
         if line[1] == 'ip' or line[1] == 'icmp':
             self.src = line[3]
             self.dst = line[5]
@@ -106,17 +105,17 @@ def is_matchable(rule, pkt):
     return True
 
 
+def change_wndw(sz):
+    '''
+    randomly change the TCP advertised window size 
+    '''
+    return int(random.random() * sz)
+
+
 def filter_pkt(rules, pkt, net, output_port, buckets):
     '''
     filter the pkt according to the rules
     '''
-    # if bucket != None:  #and bucket.pkt == pkt and bucket.size <= bucket.tokens:
-    #     print("yes!!!/n")
-    #     if bucket.pkt == pkt and bucket.size <= bucket.tokens:
-    #         print("no 1st send!")
-    #         net.send_packet(output_port, pkt)
-    #         bucket = None
-
     if not pkt.has_header(IPv4):
         net.send_packet(output_port, pkt)
         return
@@ -134,32 +133,24 @@ def filter_pkt(rules, pkt, net, output_port, buckets):
     # filter this pkt
     if rule.deny:
         return
-    #net.send_packet(output_port, pkt)
     if rule.rl == -1 and (not rule.impair):
         net.send_packet(output_port, pkt)
         return
     if rule.impair:
-        # TODO impair
+        # handle impair
+        if pkt.has_header(TCP):
+            sz = pkt[TCP].window
+            pkt[TCP].window = change_wndw(sz)
+            print("The TCP advertised window size changed from {} to {}!!!\n".
+                  format(sz, pkt[TCP].window))
         net.send_packet(output_port, pkt)
     else:
-        # TODO ratelimit
+        # handle ratelimit
         bkt = buckets[rule]
-        print("port: ", output_port)
         size = len(pkt) - len(pkt[Ethernet])
-        #bucket = Bucket(rule.rl, pkt, size)
-        print("new bucket!!!")
-        print("size: ", size)
-        # print("time: ", bucket.time)
-        print("tokens: ", bkt.tokens)
-        print("ratelimit: ", rule.rl)
-        # if pkt.has_header(ICMP):
-        #     print(pkt[ICMP].)
-        print("\n")
         if size <= bkt.tokens:
-            print("send!!!\n\n")
             bkt.tokens -= size
             net.send_packet(output_port, pkt)
-            #bucket = None
 
 
 def main(net):
@@ -168,9 +159,6 @@ def main(net):
     portpair = dict(zip(portnames, portnames[::-1]))
     rules, buckets = gather_rules()
     update_time = time.time()
-    # todo
-    # bucket0 = None  # from eth0 to eth1
-    # bucket1 = None  # from eth1 to eth0
 
     while True:
         pkt = None
@@ -190,20 +178,6 @@ def main(net):
             # rule tests.  It currently just forwards the packet
             # out the other port, but depending on the firewall rules
             # the packet may be dropped or mutilated.
-            # TODO
-            # if input_port == portnames[0]:
-            #     bucket = bucket0
-            # else:
-            #     bucket = bucket1
-            # if bucket != None and pkt == bucket.pkt and time.time(
-            # ) - bucket.time >= 0.25:
-            #     bucket.tokens = min(bucket.rl / 4 + bucket.tokens,
-            #                         2 * bucket.rl)
-            #     bucket.time = time.time()
-            # print("size: ", bucket.size)
-            # print("time: ", bucket.time)
-            # print("tokens: ", bucket.tokens)
-            # print("\n")
             filter_pkt(rules, pkt, net, portpair[input_port], buckets)
 
     net.shutdown()
