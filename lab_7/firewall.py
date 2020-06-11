@@ -8,14 +8,13 @@ class Bucket:
     designed for the token bucket algorithm
     '''
     def __init__(self, rl):
-        # TODO
         self.tokens = 2 * rl
         self.rl = rl
 
 
 class Rule:
     '''
-    some data & funcs related to firewall rules
+    some useful data related to firewall rules
     '''
     def __init__(self, line):
         self.deny = (line[0] == 'deny')
@@ -47,7 +46,7 @@ class Rule:
 def gather_rules():
     '''
     gather rules from 'firewall_rules.txt'
-    and create a list including them
+    and create a list to include them
     '''
     rules = []
     buckets = {}
@@ -89,11 +88,13 @@ def is_matchable(rule, pkt):
     see if this rule match the pkt
     '''
     ip_pkt = pkt[IPv4]
+    # compare IP addr
     if not (compare_ip(rule.src, ip_pkt.src)
             and compare_ip(rule.dst, ip_pkt.dst)):
         return False
     if rule.type == 'IPv4':
         return True
+    # compare TCP/UDP port
     if ip_pkt.protocol == IPProtocol.UDP:
         if not (compare_port(rule.srcport, pkt[UDP].src)
                 and compare_port(rule.dstport, pkt[UDP].dst)):
@@ -132,12 +133,14 @@ def filter_pkt(rules, pkt, net, output_port, buckets):
         return
     # filter this pkt
     if rule.deny:
+        # drop it
         return
     if rule.rl == -1 and (not rule.impair):
+        # no additional conditions
         net.send_packet(output_port, pkt)
         return
     if rule.impair:
-        # handle impair
+        # handle impair (TCP advertised window)
         if pkt.has_header(TCP):
             sz = pkt[TCP].window
             pkt[TCP].window = change_wndw(sz)
