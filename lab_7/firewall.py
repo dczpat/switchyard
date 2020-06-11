@@ -2,12 +2,30 @@ from switchyard.lib.userlib import *
 import time
 
 
+class Bucket:
+    '''
+    designed for the token bucket algorithm
+    '''
+    def __init__(self, rl):
+        # TODO
+        self.tokens = 2 * rl
+        self.rl = rl
+        #self.time = time.time()
+        #self.pkt = pkt
+        #self.size = size
+
+
 class Rule:
     '''
     some data & funcs related to firewall rules
     '''
     def __init__(self, line):
         self.deny = (line[0] == 'deny')
+        self.impair = (line[-1] == 'impair')
+        if line[-2] == 'ratelimit':
+            self.rl = int(line[-1])
+        else:
+            self.rl = -1
         #self.type = line[1]
         if line[1] == 'ip':
             self.type = 'IPv4'
@@ -25,27 +43,6 @@ class Rule:
             self.srcport = line[5]
             self.dst = line[7]
             self.dstport = line[9]
-        if not self.deny:
-            if line[-2] == 'ratelimit':
-                self.rl = line[-1]
-            else:
-                self.rl = -1
-            if line[-1] == 'impair':
-                self.impair = True
-            else:
-                self.impair = False
-
-
-class Bucket:
-    '''
-    designed for the token bucket algorithm
-    '''
-    def __init__(self, rl, pkt, size):
-        self.tokens = 2 * rl
-        self.rl = rl
-        self.time = time.time()
-        self.pkt = pkt
-        self.size = size
 
 
 def gather_rules():
@@ -54,6 +51,7 @@ def gather_rules():
     and create a list including them
     '''
     rules = []
+    buckets = {}
     file = open('firewall_rules.txt', 'r')
     for line in file.readlines():
         line = line.split()
@@ -61,7 +59,10 @@ def gather_rules():
             continue
         new_rule = Rule(line)
         rules.append(new_rule)
-    return rules
+        if new_rule.rl != -1:
+            bkt = Bucket(new_rule.rl)
+            buckets[new_rule] = bkt
+    return rules, buckets
 
 
 def compare_ip(x, y):
@@ -105,13 +106,16 @@ def is_matchable(rule, pkt):
     return True
 
 
-def filter_pkt(rules, pkt, net, output_port, bucket):
+def filter_pkt(rules, pkt, net, output_port, buckets):
     '''
     filter the pkt according to the rules
     '''
-    if bucket != None and bucket.pkt == pkt and bucket.size <= bucket.tokens:
-        net.send_packet(output_port, pkt)
-        bucket = None
+    # if bucket != None:  #and bucket.pkt == pkt and bucket.size <= bucket.tokens:
+    #     print("yes!!!/n")
+    #     if bucket.pkt == pkt and bucket.size <= bucket.tokens:
+    #         print("no 1st send!")
+    #         net.send_packet(output_port, pkt)
+    #         bucket = None
 
     if not pkt.has_header(IPv4):
         net.send_packet(output_port, pkt)
@@ -130,8 +134,8 @@ def filter_pkt(rules, pkt, net, output_port, bucket):
     # filter this pkt
     if rule.deny:
         return
-    net.send_packet(output_port, pkt)
-    if rule.rl == -1 and not rule.impair:
+    #net.send_packet(output_port, pkt)
+    if rule.rl == -1 and (not rule.impair):
         net.send_packet(output_port, pkt)
         return
     if rule.impair:
@@ -139,23 +143,41 @@ def filter_pkt(rules, pkt, net, output_port, bucket):
         net.send_packet(output_port, pkt)
     else:
         # TODO ratelimit
+        bkt = buckets[rule]
+        print("port: ", output_port)
         size = len(pkt) - len(pkt[Ethernet])
-        bucket = Bucket(rule.rl, pkt)
-        if bucket.size <= bucket.tokens:
+        #bucket = Bucket(rule.rl, pkt, size)
+        print("new bucket!!!")
+        print("size: ", size)
+        # print("time: ", bucket.time)
+        print("tokens: ", bkt.tokens)
+        print("ratelimit: ", rule.rl)
+        # if pkt.has_header(ICMP):
+        #     print(pkt[ICMP].)
+        print("\n")
+        if size <= bkt.tokens:
+            print("send!!!\n\n")
+            bkt.tokens -= size
             net.send_packet(output_port, pkt)
-            bucket = None
+            #bucket = None
 
 
 def main(net):
     # assumes that there are exactly 2 ports
     portnames = [p.name for p in net.ports()]
     portpair = dict(zip(portnames, portnames[::-1]))
-    rules = gather_rules()
+    rules, buckets = gather_rules()
+    update_time = time.time()
     # todo
-    bucket = None
+    # bucket0 = None  # from eth0 to eth1
+    # bucket1 = None  # from eth1 to eth0
 
     while True:
         pkt = None
+        if time.time() - update_time >= 0.25:
+            update_time = time.time()
+            for bkt in buckets.values():
+                bkt.tokens = min(bkt.rl / 4 + bkt.tokens, 2 * bkt.rl)
         try:
             timestamp, input_port, pkt = net.recv_packet(timeout=0.25)
         except NoPackets:
@@ -164,16 +186,24 @@ def main(net):
             break
 
         if pkt is not None:
-
-            # This is logically where you'd include some  firewall
+            # This is logically where you'd include some firewall
             # rule tests.  It currently just forwards the packet
             # out the other port, but depending on the firewall rules
             # the packet may be dropped or mutilated.
-            # TODO is this dict right?
-            if bucket != None and pkt == bucket.pkt and time.time(
-            ) - bucket.time >= 0.25:
-                bucket.tokens += bucket.rl / 4
-                bucket.time = time.time()
-            filter_pkt(rules, pkt, net, portpair[input_port], bucket)
+            # TODO
+            # if input_port == portnames[0]:
+            #     bucket = bucket0
+            # else:
+            #     bucket = bucket1
+            # if bucket != None and pkt == bucket.pkt and time.time(
+            # ) - bucket.time >= 0.25:
+            #     bucket.tokens = min(bucket.rl / 4 + bucket.tokens,
+            #                         2 * bucket.rl)
+            #     bucket.time = time.time()
+            # print("size: ", bucket.size)
+            # print("time: ", bucket.time)
+            # print("tokens: ", bucket.tokens)
+            # print("\n")
+            filter_pkt(rules, pkt, net, portpair[input_port], buckets)
 
     net.shutdown()
